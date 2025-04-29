@@ -2,6 +2,7 @@ const Role = require('../models/Role');
 const { fetchFromOpenAI } = require('../services/openaiService');
 const { v4: uuidv4 } = require('uuid');
 
+
 exports.getRoles = async (req, res, next) => {
   try {
     let { jobRole } = req.query;
@@ -12,7 +13,6 @@ exports.getRoles = async (req, res, next) => {
 
     jobRole = jobRole.trim();
 
-    // Step 1: Check if role already exists in DB
     const role = await Role.findOne({
       roleName: new RegExp(`^${jobRole}$`, 'i'),
       flagged: false
@@ -27,26 +27,34 @@ exports.getRoles = async (req, res, next) => {
       return res.json(relatedRoles);
     }
 
-    // Step 2: Fetch from OpenAI
-    const prompt = `Suggest 10 possible job roles related to ${jobRole}. Include the given role itself in the list. Return only the role names.`;
+    // Fetch from OpenAI
+    const prompt = `Suggest 10 possible job roles related to ${jobRole}. Include the given role itself in the list.`;
     const aiResponse = await fetchFromOpenAI(prompt);
 
     if (!Array.isArray(aiResponse) || aiResponse.length === 0) {
       return res.status(502).json({ error: "AI did not return valid roles. Please try again later." });
     }
 
-    // Step 3: Insert new roles
     const newTag = `grp_${uuidv4()}`;
 
-    const rolesToInsert = aiResponse.map(roleName => ({
-      roleName: roleName.trim(),
+    // 🛠 Prepare roles
+    const rolesFromAI = aiResponse.map(roleName => roleName.trim().toLowerCase());
+    const jobRoleNormalized = jobRole.trim().toLowerCase();
+
+    // 🛠 Check if input role already included in AI response
+    if (!rolesFromAI.includes(jobRoleNormalized)) {
+      rolesFromAI.push(jobRoleNormalized);  // add user input manually
+    }
+
+    const rolesToInsert = rolesFromAI.map(roleName => ({
+      roleName: roleName,
       associationTag: newTag
     }));
 
-
+    // Insert into DB
     await Role.insertMany(rolesToInsert);
 
-    // Step 4: Fetch and return
+    // Fetch and return inserted roles
     const finalRoles = await Role.find({
       associationTag: newTag,
       flagged: false
@@ -55,10 +63,10 @@ exports.getRoles = async (req, res, next) => {
     return res.json(finalRoles);
 
   } catch (err) {
+    console.error('Error in getRoles:', err);
     next(err);
   }
 };
-
 
 exports.roleFeedback = async (req, res) => {
   try {
